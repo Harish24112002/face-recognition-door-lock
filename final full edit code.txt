@@ -1,0 +1,170 @@
+from imutils.video import VideoStream, FPS
+import face_recognition
+import imutils
+import pickle
+import time
+import cv2 as cv
+import torch
+from torchvision import transforms
+import numpy as np
+from Model import DeePixBiS
+import pyttsx3
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import serial
+
+# Initialize Serial Communication (Uncomment if using Arduino)
+# arduino = serial.Serial(port="COM7", baudrate=115200, timeout=1)
+
+# Email Configuration
+fromaddr = "hsiva815@gmail.com"
+toaddr = "sreeramlucky2023@gmail.com"
+
+def mail(text):
+    print(text)
+    msg = MIMEMultipart()
+    msg['From'] = fromaddr
+    msg['To'] = toaddr
+    msg['Subject'] = "Unknown"
+    msg.attach(MIMEText(text, 'plain'))
+    
+    filename = "output/unknown.jpg"
+    attachment = open(filename, "rb")
+    
+    p = MIMEBase('application', 'octet-stream')
+    p.set_payload(attachment.read())
+    encoders.encode_base64(p)
+    p.add_header('Content-Disposition', f"attachment; filename={filename}")
+    msg.attach(p)
+
+    s = smtplib.SMTP('smtp.gmail.com', 587)
+    s.starttls()
+    s.login(fromaddr, "tmvtervncstbmuab")
+    s.sendmail(fromaddr, toaddr, msg.as_string())
+    s.quit()
+
+# Text-to-Speech
+engine = pyttsx3.init()
+
+# Image Preprocessing
+tfms = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
+
+# Load Face Classifier
+faceClassifier = cv.CascadeClassifier('Classifiers/haarface.xml')
+
+# Load Face Encodings
+encodingsP = "encodings.pickle"
+print("[INFO] Loading encodings and face detector...")
+data = pickle.loads(open(encodingsP, "rb").read())
+
+# Start Video Stream
+vs = VideoStream(src=0, framerate=10).start()
+# time.sleep(1)
+
+fps = FPS().start()
+
+# Face Recognition Threshold
+FACE_RECOGNITION_THRESHOLD = 0.5  
+
+def speak(text):
+    print(text)
+    engine.say(text)
+    engine.runAndWait()
+
+def lock_door():
+    print("🚪 Door Locked! Unknown Person Detected!")
+    # Uncomment to send a signal to Arduino
+    # arduino.write(b"L")  # Sending 'L' to indicate LOCK
+    speak("Door locked due to unknown person.")
+
+def unlock_door():
+    print("✅ Door Unlocked!")
+    # Uncomment to send a signal to Arduino
+    # arduino.write(b"U")  # Sending 'U' to indicate UNLOCK
+    speak("Access granted, door unlocked.")
+
+while True:
+    frame = vs.read()
+    frame = imutils.resize(frame, width=500)
+    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+    # Face Detection
+    faces = faceClassifier.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=6)
+
+    # Face Recognition
+    boxes = face_recognition.face_locations(frame)
+    encodings = face_recognition.face_encodings(frame, boxes)
+    names = []
+
+    unknown_detected = False  # Flag to track unknown persons
+
+    for encoding in encodings:
+        matches = face_recognition.compare_faces(data["encodings"], encoding)
+        face_distances = face_recognition.face_distance(data["encodings"], encoding)
+        
+        name = "Unknown"
+        if True in matches:
+            best_match_index = np.argmin(face_distances)
+            if face_distances[best_match_index] < FACE_RECOGNITION_THRESHOLD:
+                name = data["name"][best_match_index]  # Corrected key 'name' here
+
+        names.append(name)
+        time.sleep(12)
+        if name == "Unknown":
+            unknown_detected = True
+
+    # Draw Bounding Box
+    for ((top, right, bottom, left), name) in zip(boxes, names):
+        color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+        cv.rectangle(frame, (left, top), (right, bottom), color, 2)
+        cv.putText(frame, name, (left, top - 10), cv.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+    for name in names:
+        if name == "Unknown":
+            print("UNKNOWN PERSON here")
+            # time.sleep(30)
+            files = "output/unknown.jpg"
+            cv.imwrite(files, frame)
+            speak("Unknown person detected.")
+            mail("Unknown_person")
+        elif name == "Harish":
+            print("HARISH HERE")
+            # time.sleep(2)
+            files = "output/harish.jpg"
+            cv.imwrite(files, frame)
+            speak("Harish detected. Access granted.")
+            #arduino.write(b"A")
+            #arduino.write(b"B")
+        elif name == "Sriram":
+            print("SRIRAM HERE")
+            # time.sleep(30)
+            files = "output/sriram.jpg"
+            cv.imwrite(files, frame)
+            speak("Sriram detected. Access granted.")
+            #arduino.write(b"A")
+            #arduino.write(b"B")
+        else:
+            # For any other face (not recognized)
+            print("UNKNOWN PERSON here")
+            # time.sleep(30)
+            files = "output/unknown.jpg"
+            cv.imwrite(files, frame)
+            speak("Unknown person detected.")
+            mail("Unknown_person")
+    
+    # Display the image
+    cv.imshow('PERSON IDENTIFICATION', frame)
+    engine.runAndWait()
+
+    # Exit on pressing 'q'
+    key = cv.waitKey(1) & 0xFF
+    if key == ord("q"):
+        break
